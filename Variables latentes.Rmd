@@ -1,0 +1,226 @@
+---
+title: "Variables latentes"
+author: "AIGOIN Emilie"
+date: "2026-02-25"
+output: html_document
+---
+
+# Mise en place des données
+
+### Chargement des packages nécessaires
+
+```{r, warning = FALSE, message = FALSE}
+
+library(dplyr)
+library(FactoMineR)
+library(factoextra)
+library(ggplot2)
+library(flexmix)
+library(ClustOfVar)
+
+```
+
+### Ouvrir le fichier contenant le jeu de données
+
+```{r, warning=FALSE}
+
+# Chargement des données
+data <- read.csv("Datagenus.csv", sep = ";", dec = ",", header = TRUE)
+
+# Suppression de l'identifiant
+data <- data %>% select(-code)
+
+# Définition de Y (comptages des 27 genres d'arbres)
+data_Y <- data %>% select(num_range("gen", 1:27))
+
+# Définition de X (var enviro continues, forest et geology sont exclues)
+data_X <- data %>% select(
+  altitude,
+  pluvio_yr, num_range("pluvio_", 1:12),
+  num_range("evi_", 1:23),
+  lon, lat, surface
+)
+                          
+```
+
+```{r}
+
+# Ajout des termes quadratiques (effet non linéaire potentiel)
+data_X_quad <- data_X %>%
+  mutate(
+    altitude2  = (altitude  - mean(altitude))^2,
+    pluvio_yr2 = (pluvio_yr - mean(pluvio_yr))^2
+  ) %>%
+  select(-pluvio_yr)  # suppression de pluvio_yr
+
+```
+
+```{r}
+
+# ACP sur X (variables centrées-réduites)
+acp <- PCA(data_X_quad, scale.unit = TRUE, graph = FALSE)
+
+# Variance expliquée par composante
+fviz_eig(acp, 
+         addlabels = TRUE, 
+         ncp = 20,
+         barfill = "lightblue",      # couleur des barres
+         barcolor = "lightblue",      # bordure des barres
+         linecolor = "black",        # couleur de la courbe
+         main = "Graphique des éboulis",
+         xlab = "Composantes principales",
+         ylab = "Pourcentage de variance expliquée (%)") +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Valeurs propres numériques
+head(acp$eig, 15)
+
+```
+
+# Modèle de mélange
+
+```{r}
+
+set.seed(309)  # pour la reproductibilité
+
+# Récupération des scores ACP sur les 4 premières composantes
+scores_acp <- as.data.frame(acp$ind$coord[, 1:4])
+colnames(scores_acp) <- paste0("CP", 1:4)
+
+# Formule : mélange gaussien sur les 4 scores (on teste K de 1 à 8 classes)
+bic_vec <- numeric(8)
+aic_vec <- numeric(8)
+icl_vec <- numeric(8)
+
+for(k in 1:8){
+  # Ajustement du modèle de mélange gaussien à K classes
+  fit <- flexmix(
+    # Mélange sur les 4 composantes principales (pas de prédicteur)
+    cbind(CP1, CP2, CP3, CP4) ~ 1,
+    k = k,
+    data = scores_acp,
+    # Distribution gaussienne dans chaque classe
+    model  = FLXMCmvnorm()
+  )
+  bic_vec[k] <- BIC(fit)
+  aic_vec[k] <- AIC(fit)
+  icl_vec[k] <- ICL(fit)
+}
+
+```
+
+```{r}
+
+# Graphique des critères de choix de K
+plot(1:8, bic_vec, type = "b", col = "#2E7D32", pch = 19,
+     xlab = "Nombre de classes K",
+     ylab = "Critère",
+     main = "Choix du nombre de classes du mélange",
+     ylim = range(c(bic_vec, aic_vec, icl_vec)))
+lines(1:8, aic_vec, type = "b", col = "#C62828", pch = 19)
+lines(1:8, icl_vec, type = "b", col = "#1565C0", pch = 19)
+legend("topright",
+       legend = c("BIC", "AIC", "ICL"),
+       col    = c("#2E7D32", "#C62828", "#1565C0"),
+       pch = 19, lty = 1)
+
+```
+
+```{r}
+
+# Valeurs numériques
+data.frame(K = 1:8, BIC = bic_vec, AIC = aic_vec, ICL = icl_vec)
+
+```
+
+```{r}
+
+set.seed(309)
+
+# Ajustement du modèle de mélange final avec K = 6 classes
+fit_final <- flexmix(
+  cbind(CP1, CP2, CP3, CP4) ~ 1,
+  k = 6,
+  data = scores_acp,
+  model = FLXMCmvnorm()
+)
+
+# Résumé du modèle
+summary(fit_final)
+
+# Tailles des classes (nombre de parcelles par classe)
+table(clusters(fit_final))
+
+# Probabilités a posteriori P(Z=k | X=xi) pour chaque individu
+post_prob <- posterior(fit_final)
+head(post_prob)
+
+# Classe assignée à chaque parcelle (affectation MAP)
+classes <- clusters(fit_final)
+
+```
+
+```{r}
+
+# Moyennes des scores ACP par classe
+aggregate(scores_acp, by = list(Classe = classes), FUN = mean)
+
+```
+
+```{r}
+
+plot(scores_acp$CP1, scores_acp$CP2,
+     col  = classes, pch = 19, cex = 0.6,
+     xlab = "CP1 (33,7%)", ylab = "CP2 (20,2%)",
+     main = "Classes du mélange dans le plan (CP1, CP2)")
+legend("topright", legend = paste("Classe", 1:6),
+       col = 1:6, pch = 19)
+
+```
+
+```{r}
+
+# Classification des variables de X
+tree <- hclustvar(data_X_quad)
+
+# Dendrogramme
+plot(tree, main = "Dendrogramme - ClustOfVar")
+
+# Choix du nombre de groupes de variables (stabilité)
+stab <- stability(tree, B = 50)
+plot(stab, main = "Stabilité des partitions")
+
+# Partition en K groupes (K = 6 pour comparer)
+part <- cutreevar(tree, k = 6)
+summary(part)
+
+```
+
+```{r}
+
+# Afficher le résumé complet
+print(summary(part))
+
+```
+
+```{r}
+
+# Moyennes des variables originales de X par classe
+data_X_classes <- data_X_quad
+data_X_classes$classe <- classes
+
+moyennes <- aggregate(. ~ classe, data = data_X_classes, FUN = mean)
+
+# On regarde les variables les plus discriminantes
+# (une par groupe ClustOfVar)
+moyennes[, c("classe", "altitude", "pluvio_9", 
+             "lat", "pluvio_7", "lon", "pluvio_4",
+             "evi_3", "evi_10", "evi_21")]
+
+```
+
+
+
+
+
