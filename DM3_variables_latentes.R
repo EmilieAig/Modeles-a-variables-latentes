@@ -1,5 +1,6 @@
 # install.packages(c("flexmix", "ClustOfVar", "FactoMineR", "factoextra","pls","dplyr"))
 
+# Charger les packages 
 library(flexmix)
 library(ClustOfVar)
 library(FactoMineR)
@@ -14,14 +15,14 @@ data <- read.csv("Datagenus.csv", sep = "\t", dec = ",", header = TRUE)
 data$forest <- NULL
 data$geology <- NULL
 
-# Séparation X / Y
+# Séparation X et Y
 Y <- data[, 1:27]                 # variables biologiques
 X <- data[, -(1:27)]              # variables explicatives
 
-# garder seulement les variables numériques
+# On garde seulement les variables numériques
 X_quanti <- X[, sapply(X, is.numeric)]
 
-# ACP (exploration)
+# ACP
 res.pca <- PCA(X_quanti, scale.unit = TRUE, graph = FALSE)
 
 # Scree plot
@@ -33,7 +34,7 @@ fviz_pca_var(res.pca)
 # Projection des individus
 fviz_pca_ind(res.pca)
 
-# modèle linéaire
+# Modèle linéaire 
 for (col in colnames(Y)) {
   mod <- lm(Y[[col]] ~ ., data = X_quanti)
   cat("\n===== Modèle pour", col, "=====\n")
@@ -56,22 +57,22 @@ summary(res_pls)
 # Graphique RMSEP
 validationplot(res_pls, val.type = "RMSEP")
 
-# Scores individus
+# Scores individuels
 scores_pls <- scores(res_pls)
 
 plot(scores_pls[,1], scores_pls[,2],
      xlab = "Comp 1", ylab = "Comp 2",
      main = "PLS - individus")
 
-# réduction de Y (PCA sur Y)
+# Réduction de Y (PCA sur Y)
 pca_Y <- prcomp(Y, scale = TRUE)
 
 summary(pca_Y)   
 
-# première composante
+# Première composante
 data$Y1 <- pca_Y$x[,1]
 
-# modèle de mélange (FLEXMIX) : dataset propre 
+# Modèle de mélange (FLEXMIX) : dataset propre 
 data_mix <- data.frame(Y1 = data$Y1, X_quanti)
 
 set.seed(123)
@@ -84,8 +85,16 @@ mod3 <- flexmix(Y1 ~ ., data = data_mix, k = 3)
 bic_vals <- BIC(mod1, mod2, mod3)
 print(bic_vals)
 
-# Choix du meilleur modèle (à adapter selon BIC)
-best_mod <- mod3
+# Comparaison AIC
+AIC(mod1, mod2, mod3)
+
+# Comparaison des log‑vraisemblances 
+logLik(mod1)
+logLik(mod2)
+logLik(mod3)
+
+# Choix du meilleur modèle 
+best_mod <- mod2
 
 summary(best_mod)
 
@@ -102,10 +111,10 @@ aggregate(Y, by = list(cluster = clusters), mean)
 # Moyennes des variables explicatives
 aggregate(X_quanti, by = list(cluster = clusters), mean)
 
-# clustering des variables 
+# Clustering des variables 
 tree <- hclustvar(X_quanti)
 plot(tree)
 
-# partition en groupes
+# Partition en groupes
 part <- cutreevar(tree, k = 3)
 summary(part)
